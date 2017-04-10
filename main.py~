@@ -1,0 +1,4 @@
+import udpSocket
+
+udp = MulticastUDPSocket(6789, "225.1.2.3")
+udp.send("oi".encode())
