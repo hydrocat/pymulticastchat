@@ -1,4 +1,4 @@
-DEBUG = True
+DEBUG = False
 if DEBUG == True:
     def dprint(*args, **kargs):
         print('\033[94mINFO\033[0m', *args, **kargs)

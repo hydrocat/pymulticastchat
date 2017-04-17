@@ -1,10 +1,11 @@
  #Implementa o protocolo dado
 import time 
 import udpSocket
+import tcpSocket
 from debug import *
 import re
-from os import listdir
-from os.path import isdir
+from os import listdir, stat
+from os.path import isdir, join
 LEAVE_TIMEOUT = 1
 
 # MCAST_GROUP = "225.1.2.3"
@@ -15,6 +16,8 @@ MCAST_GROUP = "225.1.2.3"
 MCAST_PORT  = 5566
 
 UNICAST_PORT = 5555
+
+BUF_SIZE = 1000
 
 regexes = [
     re.compile(
@@ -66,6 +69,7 @@ def recv_leave(secretaria, match, addr):
 def recv_msgidv(secretaria, match, addr):
     print("_{}_ diz: {}".format(match.group('de'),
                                 match.group('msg')))
+    
 def recv_listfiles(secretaria, match, addr):
     files = ", ".join([x for x in listdir(secretaria.filedir) if not isdir(x)])
     secretaria.sendUnicast("FILES", match.group('apelido'), files)
@@ -77,11 +81,29 @@ def recv_files(secretaria, match, addr):
             contact = name
             break
     print("{} tem os arquivos: {}".format(contact, match.group('filenames')))
+
     
 def recv_downfile(secretaria, match, addr):
-    pass
-def recv_downifo(secretaria, match, addr):
-    pass
+    filename = match.group('filename')
+    fileContents = open(join(secretaria.filedir,filename), 'rb').read()
+    sock = tcpSocket.TCPSocket()
+    sock.onAccept(lambda sock: fileContents )
+    secretaria.sendUnicast("DOWNINFO",
+                           secretaria.nickname,
+                           filename,
+                           stat( join(secretaria.filedir,filename)).st_size,
+                           secretaria.contacts[secretaria.nickname],
+                           sock.sock.getsockname()[1]
+    )
+    
+def recv_downinfo(secretaria, match, addr):
+    filename = "download-" + match.group('filename')
+    f = open(join(secretaria.filedir,filename),'wb')
+    sock = tcpSocket.TCPSocket()
+    sock.onConnect(match.group('ip'),
+                   int( match.group('porta') ),
+                   f.write
+                   )
 
 recv_functions = {
     "JOIN" : recv_join,
@@ -90,8 +112,8 @@ recv_functions = {
     "MSGIDV FROM" : recv_msgidv,
     "LISTFILES" : recv_listfiles,
     "FILES": recv_files,
-    "DOWNFILE": lambda: dprint("Nao implementado downflie"),
-    "DOWNINFO": lambda: dprint("Nao implementado downinfo"),
+    "DOWNFILE": recv_downfile,
+    "DOWNINFO": recv_downinfo,
     "LEAVE" : recv_leave
 }
 
@@ -99,7 +121,41 @@ MULTICAST_COMMANDS = ["JOIN", "MSG", "LEAVE"]
 UNICAST_COMMANDS = ["JOINACK"  , "MSGIDV FROM",
                     "LISTFILES", "FILES",
                     "DOWNINFO" , "DOWNFILE" ]
+
+boss_commands = [
+    re.compile(r"(?P<cmd>\@)(?P<apelido>.*) (?P<msg>.*)"),
+    re.compile(r"(?P<cmd>!)(?P<apelido>.*) !(?P<nomearquivo>.*)"),
+    re.compile(r"(?P<cmd>\?)"),
+    re.compile(r'(?P<cmd>\*)(?P<apelido>.*)')
+]
+
+def send_listfile(secretaria, match):
+    secretaria.sendUnicast("LISTFILES",
+                           match.group('apelido'),
+                           secretaria.nickname)
     
+def send_msgidv(secretaria, match):
+    secretaria.sendUnicast("MSGIDV FROM",
+                           match.group('apelido'),
+                           secretaria.nickname,
+                           match.group('apelido'),
+                           match.group('msg'))
+
+def send_downfile(secretaria, match):
+    secretaria.sendUnicast("DOWNFILE",
+                           match.group('apelido'),
+                           match.group('apelido'),
+                           match.group('nomearquivo'))
+
+def show_contacts(secretaria, match):
+    print(secretaria.contacts)
+    
+send_functions = {
+    '*': send_listfile,
+    '@': send_msgidv,
+    '!': send_downfile,
+    '?': show_contacts
+}
 class Secretaria(object):
     def __init__(self, nickname, filedir):
         self.nickname = nickname
@@ -108,6 +164,7 @@ class Secretaria(object):
                                                       MCAST_GROUP,
                                                       ip = MCAST_GROUP,
             callback = self.MessageCallbackFactory(MULTICAST_COMMANDS,debug="MCast"))
+        
         self.unicast = udpSocket.UDPSocket(UNICAST_PORT,    
             callback = self.MessageCallbackFactory(UNICAST_COMMANDS, debug="Unicast"))
  
@@ -146,20 +203,34 @@ class Secretaria(object):
                     wprint("{} Bad message Received, Not in accpet ".format(debug))
             except IndexError:
                 wprint("{} Bad message received\n{}".format(debug, data))
-        return callback             
+        return callback
+    
+    def attendRequest(self, message ):
+        sprint(message)
+        try:
+            match = getCmdMatch( message )
+            send_functions[match.group('cmd')](self, match)
+        except IndexError:
+            self.sendMulticast("MSG", self.nickname, message)
+            
+        
         
 #Raises IndexError if the message ain't good
 def getMatch( msg ):
-        return list(filter(None,(x.search(msg) for x in regexes)))[0]
-        
-s = Secretaria("vitorio", "/home/hydrocat/SD/chat")
+    return list(filter(None,(x.search(msg) for x in regexes)))[0]
+def getCmdMatch( msg ):
+    return list(filter(None,(x.search(msg) for x in boss_commands)))[0]
+# s = Secretaria("vitorio", "/home/hydrocat/SD/chat")
 
-try:
-    while True:
-        sprint(s.contacts)
-#        s.sendMulticast("MSG",*(s.nickname,("teste")))
-        time.sleep(2)
-        s.sendUnicast("LISTFILES",s.nickname, s.nickname)
+# try:
+#     while True:
+#         sprint(s.contacts)
+# #        s.sendMulticast("MSG",*(s.nickname,("teste")))
+#         time.sleep(2)
+#         s.sendUnicast("LISTFILES",s.nickname, s.nickname)
+#         time.sleep(2)
+#         s.sendUnicast("DOWNFILE",s.nickname, s.nickname, "main.py")
+
         
-except KeyboardInterrupt:
-    s.leaveGroup()
+# except KeyboardInterrupt:
+#     s.leaveGroup()
